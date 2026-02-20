@@ -238,7 +238,7 @@ export const drawIceMask: FilterRenderer = (ctx, { cx, cy, faceW, faceH }, tick)
     const radius = maskW * 0.8 + Math.sin(tick * 0.02 + i * 1.1) * 20;
     const px = Math.cos(angle) * radius;
     const py = Math.sin(angle) * radius * 0.6 - faceH * 0.08;
-    const size = 1 + Math.sin(tick * 0.06 + i * 0.7) * 1.5;
+    const size = Math.max(0.1, 1 + Math.sin(tick * 0.06 + i * 0.7) * 1.5);
     const alpha = 0.3 + Math.sin(tick * 0.05 + i * 1.3) * 0.3;
 
     ctx.beginPath();
