@@ -1,12 +1,20 @@
 import { useState, useCallback, useRef } from "react";
 import { AnimatePresence } from "framer-motion";
+import { toast } from "sonner";
 import StatusBar from "@/components/StatusBar";
 import ARViewport from "@/components/ARViewport";
 import ModelPreview from "@/components/ModelPreview";
 import FilterForge from "@/components/FilterForge";
 import FilterGallery, { type Filter } from "@/components/FilterGallery";
 import FullscreenAR from "@/components/FullscreenAR";
-import { getRendererForPrompt, filterRenderers, drawIceMask, drawBioHalo } from "@/components/ar/filterRenderers";
+import {
+  filterRenderers,
+  drawIceMask,
+  drawBioHalo,
+  createDynamicRenderer,
+  type AIFilterParams,
+} from "@/components/ar/filterRenderers";
+import { supabase } from "@/integrations/supabase/client";
 
 const Index = () => {
   const [filters, setFilters] = useState<Filter[]>([
@@ -53,59 +61,77 @@ const Index = () => {
   const [progress, setProgress] = useState(0);
   const [genStatus, setGenStatus] = useState("");
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setInterval>>();
 
-  // Register renderers for new presets on first render
+  // Register renderers for presets on first render
   if (!filterRenderers["preset-3"]) {
     filterRenderers["preset-3"] = drawIceMask;
     filterRenderers["preset-4"] = drawBioHalo;
   }
 
-  const simulateGeneration = useCallback((prompt: string) => {
+  const generateFilter = useCallback(async (prompt: string) => {
     setIsGenerating(true);
-    setProgress(0);
+    setProgress(10);
+    setGenStatus("Sending prompt to AI...");
 
-    const steps = [
-      { p: 15, s: "Parsing prompt with Gemini Pro..." },
-      { p: 30, s: "Extracting anchor & animation metadata..." },
-      { p: 50, s: "Generating 3D mesh via Neural 3D API..." },
-      { p: 70, s: "Applying PBR textures..." },
-      { p: 85, s: "Optimizing for real-time rendering..." },
-      { p: 95, s: "Deploying to AR pipeline..." },
-      { p: 100, s: "Filter ready!" },
-    ];
+    try {
+      setProgress(30);
+      setGenStatus("AI analyzing prompt & designing filter...");
 
-    let step = 0;
-    timerRef.current = setInterval(() => {
-      if (step < steps.length) {
-        setProgress(steps[step].p);
-        setGenStatus(steps[step].s);
-        step++;
-      } else {
-        clearInterval(timerRef.current);
-        setIsGenerating(false);
+      const { data, error } = await supabase.functions.invoke("generate-filter", {
+        body: { prompt },
+      });
 
-        const name = prompt.split(" ").slice(0, 2).join(" ");
-        const anchors = ["HEAD", "SHOULDERS", "HAND", "WORLD"];
-        const anims = ["FLOAT", "ROTATE", "PULSE"];
-
-        const newFilter: Filter = {
-          id: `gen-${Date.now()}`,
-          name: name.charAt(0).toUpperCase() + name.slice(1),
-          prompt,
-          status: "ready",
-          anchorType: anchors[Math.floor(Math.random() * anchors.length)],
-          animation: anims[Math.floor(Math.random() * anims.length)],
-          createdAt: new Date().toISOString(),
-        };
-
-        // Register the renderer for this new filter
-        filterRenderers[newFilter.id] = getRendererForPrompt(prompt);
-
-        setFilters((prev) => [newFilter, ...prev]);
-        setActiveFilterId(newFilter.id);
+      if (error) {
+        throw new Error(error.message || "Failed to generate filter");
       }
-    }, 1200);
+
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+
+      const aiParams: AIFilterParams = data.filter;
+
+      setProgress(70);
+      setGenStatus("Building dynamic renderer...");
+
+      const filterId = `gen-${Date.now()}`;
+
+      // Create and register the dynamic renderer from AI params
+      filterRenderers[filterId] = createDynamicRenderer(aiParams);
+
+      setProgress(90);
+      setGenStatus("Deploying to AR pipeline...");
+
+      await new Promise((r) => setTimeout(r, 500));
+
+      const newFilter: Filter = {
+        id: filterId,
+        name: aiParams.name,
+        prompt,
+        status: "ready",
+        anchorType: aiParams.anchorPoint,
+        animation: aiParams.animation,
+        createdAt: new Date().toISOString(),
+        aiParams,
+        description: aiParams.description,
+      };
+
+      setFilters((prev) => [newFilter, ...prev]);
+      setActiveFilterId(filterId);
+
+      setProgress(100);
+      setGenStatus("Filter ready!");
+      toast.success(`"${aiParams.name}" filter created!`);
+
+      await new Promise((r) => setTimeout(r, 600));
+    } catch (err) {
+      console.error("Generation failed:", err);
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      toast.error(`Filter generation failed: ${msg}`);
+      setGenStatus("Generation failed");
+    } finally {
+      setIsGenerating(false);
+    }
   }, []);
 
   const handleSelectFilter = useCallback((id: string) => {
@@ -157,7 +183,7 @@ const Index = () => {
             {/* Right: Forge + Info */}
             <div className="lg:col-span-4 space-y-4">
               <FilterForge
-                onGenerate={simulateGeneration}
+                onGenerate={generateFilter}
                 isGenerating={isGenerating}
                 progress={progress}
                 status={genStatus}
@@ -184,6 +210,29 @@ const Index = () => {
                       </div>
                     ))}
                   </div>
+                  {activeFilter.description && (
+                    <div className="space-y-0.5">
+                      <span className="text-[9px] font-mono text-muted-foreground uppercase">AI Description</span>
+                      <div className="text-[10px] font-mono text-neon-cyan/70 leading-relaxed">
+                        {activeFilter.description}
+                      </div>
+                    </div>
+                  )}
+                  {activeFilter.aiParams && (
+                    <div className="flex gap-1.5 mt-1">
+                      {[activeFilter.aiParams.primaryColor, activeFilter.aiParams.secondaryColor, activeFilter.aiParams.accentColor].map((c, i) => (
+                        <div
+                          key={i}
+                          className="w-5 h-5 rounded-full border border-border"
+                          style={{ backgroundColor: `hsl(${c.h}, ${c.s}%, ${c.l}%)` }}
+                          title={`hsl(${c.h}, ${c.s}%, ${c.l}%)`}
+                        />
+                      ))}
+                      <span className="text-[8px] font-mono text-muted-foreground self-center ml-1">
+                        AI PALETTE
+                      </span>
+                    </div>
+                  )}
                   <div className="space-y-0.5">
                     <span className="text-[9px] font-mono text-muted-foreground uppercase">Prompt</span>
                     <div className="text-[10px] font-mono text-secondary-foreground/70 leading-relaxed">
