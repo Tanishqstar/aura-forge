@@ -1,16 +1,21 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { motion } from "framer-motion";
+import { filterRenderers, getRendererForPrompt, type FaceRect, type FilterRenderer } from "@/components/ar/filterRenderers";
+import { type Filter } from "@/components/FilterGallery";
 
 interface ARViewportProps {
   activeFilter: string | null;
+  filters: Filter[];
+  onGoFullscreen: () => void;
 }
 
-const ARViewport = ({ activeFilter }: ARViewportProps) => {
+const ARViewport = ({ activeFilter, filters, onGoFullscreen }: ARViewportProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [faceDetected, setFaceDetected] = useState(false);
   const animFrameRef = useRef<number>(0);
+  const tickRef = useRef(0);
 
   const startStream = useCallback(async () => {
     try {
@@ -29,14 +34,20 @@ const ARViewport = ({ activeFilter }: ARViewportProps) => {
 
   const stopStream = useCallback(() => {
     if (videoRef.current?.srcObject) {
-      const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-      tracks.forEach((t) => t.stop());
+      (videoRef.current.srcObject as MediaStream).getTracks().forEach((t) => t.stop());
       videoRef.current.srcObject = null;
       setIsStreaming(false);
     }
   }, []);
 
-  // Simulated face detection overlay
+  const getActiveRenderer = useCallback((): FilterRenderer | null => {
+    if (!activeFilter) return null;
+    if (filterRenderers[activeFilter]) return filterRenderers[activeFilter];
+    const filter = filters.find((f) => f.id === activeFilter);
+    if (filter) return getRendererForPrompt(filter.prompt);
+    return null;
+  }, [activeFilter, filters]);
+
   useEffect(() => {
     if (!isStreaming || !canvasRef.current || !videoRef.current) return;
 
@@ -44,67 +55,22 @@ const ARViewport = ({ activeFilter }: ARViewportProps) => {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    let tick = 0;
     const draw = () => {
       canvas.width = videoRef.current!.videoWidth || 640;
       canvas.height = videoRef.current!.videoHeight || 480;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Simulated face mesh overlay
-      if (activeFilter) {
-        tick++;
-        const cx = canvas.width / 2;
-        const cy = canvas.height / 2 - 20;
-        const breathe = Math.sin(tick * 0.03) * 5;
+      tickRef.current++;
+      const renderer = getActiveRenderer();
 
-        // Face tracking reticle
-        ctx.strokeStyle = "hsl(190, 100%, 50%)";
-        ctx.lineWidth = 1.5;
-        ctx.shadowColor = "hsl(190, 100%, 50%)";
-        ctx.shadowBlur = 10;
-        ctx.beginPath();
-        ctx.ellipse(cx, cy, 90 + breathe, 120 + breathe, 0, 0, Math.PI * 2);
-        ctx.stroke();
-
-        // Corner brackets
-        const sz = 20;
-        const off = 140 + breathe;
-        ctx.strokeStyle = "hsl(320, 100%, 60%)";
-        ctx.shadowColor = "hsl(320, 100%, 60%)";
-        ctx.lineWidth = 2;
-
-        // Top-left
-        ctx.beginPath();
-        ctx.moveTo(cx - off, cy - off + sz);
-        ctx.lineTo(cx - off, cy - off);
-        ctx.lineTo(cx - off + sz, cy - off);
-        ctx.stroke();
-        // Top-right
-        ctx.beginPath();
-        ctx.moveTo(cx + off - sz, cy - off);
-        ctx.lineTo(cx + off, cy - off);
-        ctx.lineTo(cx + off, cy - off + sz);
-        ctx.stroke();
-        // Bottom-left
-        ctx.beginPath();
-        ctx.moveTo(cx - off, cy + off - sz);
-        ctx.lineTo(cx - off, cy + off);
-        ctx.lineTo(cx - off + sz, cy + off);
-        ctx.stroke();
-        // Bottom-right
-        ctx.beginPath();
-        ctx.moveTo(cx + off - sz, cy + off);
-        ctx.lineTo(cx + off, cy + off);
-        ctx.lineTo(cx + off, cy + off - sz);
-        ctx.stroke();
-
-        // Status text
-        ctx.font = "11px 'JetBrains Mono', monospace";
-        ctx.fillStyle = "hsl(190, 100%, 50%)";
-        ctx.shadowBlur = 5;
-        ctx.fillText("FACE_MESH: LOCKED", cx - off, cy - off - 10);
-        ctx.fillText(`ANCHOR: HEAD`, cx + off - 80, cy + off + 20);
-
+      if (renderer) {
+        const face: FaceRect = {
+          cx: canvas.width / 2,
+          cy: canvas.height / 2 - canvas.height * 0.04,
+          faceW: canvas.width * 0.22,
+          faceH: canvas.height * 0.36,
+        };
+        renderer(ctx, face, tickRef.current, canvas.width, canvas.height);
         setFaceDetected(true);
       } else {
         setFaceDetected(false);
@@ -115,7 +81,7 @@ const ARViewport = ({ activeFilter }: ARViewportProps) => {
 
     draw();
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, [isStreaming, activeFilter]);
+  }, [isStreaming, getActiveRenderer]);
 
   useEffect(() => {
     return () => stopStream();
@@ -137,13 +103,9 @@ const ARViewport = ({ activeFilter }: ARViewportProps) => {
         </div>
         <div className="flex items-center gap-2">
           {faceDetected && (
-            <span className="text-[10px] font-mono text-neon-cyan animate-pulse-glow">
-              ● TRACKING
-            </span>
+            <span className="text-[10px] font-mono text-neon-cyan animate-pulse-glow">● TRACKING</span>
           )}
-          <span className="text-[10px] font-mono text-muted-foreground">
-            640×480 @60FPS
-          </span>
+          <span className="text-[10px] font-mono text-muted-foreground">640×480</span>
         </div>
       </div>
 
@@ -162,11 +124,7 @@ const ARViewport = ({ activeFilter }: ARViewportProps) => {
           className="absolute inset-0 w-full h-full pointer-events-none"
           style={{ transform: "scaleX(-1)" }}
         />
-
-        {/* Scanline overlay */}
-        {isStreaming && <div className="absolute inset-0 scanlines pointer-events-none opacity-30" />}
-
-        {/* No stream placeholder */}
+        {isStreaming && <div className="absolute inset-0 scanlines pointer-events-none opacity-20" />}
         {!isStreaming && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
             <div className="w-16 h-16 rounded-full border-2 border-dashed border-muted-foreground flex items-center justify-center">
@@ -192,14 +150,12 @@ const ARViewport = ({ activeFilter }: ARViewportProps) => {
           {isStreaming ? "■ Stop" : "▶ Start Stream"}
         </button>
         <div className="flex gap-1">
-          {["REC", "OCL", "DBG"].map((label) => (
-            <span
-              key={label}
-              className="px-2 py-0.5 rounded text-[9px] font-mono border border-border text-muted-foreground hover:text-foreground hover:border-primary/30 cursor-pointer transition-colors"
-            >
-              {label}
-            </span>
-          ))}
+          <button
+            onClick={onGoFullscreen}
+            className="px-2 py-0.5 rounded text-[9px] font-mono border border-primary/30 text-primary hover:bg-primary/10 cursor-pointer transition-colors"
+          >
+            ⛶ FULLSCREEN
+          </button>
         </div>
       </div>
     </motion.div>
