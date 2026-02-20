@@ -32,11 +32,34 @@ serve(async (req) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "google/gemini-3-flash-preview",
+          model: "google/gemini-2.5-flash",
           messages: [
             {
               role: "system",
-              content: `You are an AR filter design AI. Given a user's description of an AR filter, generate detailed rendering parameters. You MUST call the generate_filter tool with your response.`,
+              content: `You are a world-class AR filter designer. Given a user's description, you must design a visually stunning, unique AR filter by choosing creative parameters.
+
+IMPORTANT DESIGN RULES:
+- Choose filterType that BEST matches the user's vision. Don't default to "mask" unless it's clearly about face masks/glasses.
+  - "crown" = headpieces, tiaras, horns, hats, anything worn on top of head
+  - "wings" = wings, capes, auras radiating from shoulders
+  - "mask" = face masks, glasses, eye coverings, face paint
+  - "halo" = halos, rings, floating objects above head, orbital elements
+  - "particles" = ambient particles, sparkles, snow, fireflies, floating elements
+  - "geometric" = sacred geometry, wireframes, tech overlays, HUD elements
+- Colors should be VIBRANT and match the theme. Don't use all black/gray. Be creative with hues!
+  - Fire themes: warm reds (0-30), oranges (30-50), yellows (50-65)
+  - Ice themes: cool blues (190-220), cyan (170-190)
+  - Nature themes: greens (90-150), earth tones
+  - Cosmic themes: deep purples (260-300), magentas (300-340)
+  - Gold/Royal: warm yellows (40-55) with high saturation
+- particleCount: 8-25 for rich effects. Higher = more dramatic
+- glowIntensity: 10-25 for visible glow effects. Don't be shy!
+- scale: 0.8-1.5 for visible effects. Default 1.0
+- speed: 0.5-2.0. Faster for energetic effects, slower for elegant ones
+- name: Be creative and evocative! 2-3 words max
+- description: Paint a vivid picture of the visual effect in one sentence
+
+You MUST call the generate_filter tool with your response.`,
             },
             {
               role: "user",
@@ -119,7 +142,7 @@ serve(async (req) => {
                     },
                     description: {
                       type: "string",
-                      description: "One sentence describing the visual effect",
+                      description: "One vivid sentence describing the visual effect",
                     },
                   },
                   required: [
