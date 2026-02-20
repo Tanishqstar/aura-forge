@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { type Filter } from "@/components/FilterGallery";
 import { filterRenderers, getRendererForPrompt, type FaceRect, type FilterRenderer } from "@/components/ar/filterRenderers";
+import { useFaceDetection } from "@/hooks/useFaceDetection";
 
 interface FullscreenARProps {
   filters: Filter[];
@@ -17,6 +18,11 @@ const FullscreenAR = ({ filters, activeFilterId, onSelectFilter, onExit }: Fulls
   const [showFilters, setShowFilters] = useState(true);
   const animFrameRef = useRef<number>(0);
   const tickRef = useRef(0);
+  const [canvasSize, setCanvasSize] = useState({ w: 1280, h: 720 });
+
+  const { detectFace, faceDetected, hasFaceTracking } = useFaceDetection(
+    videoRef, canvasSize.w, canvasSize.h, isStreaming
+  );
 
   const startStream = useCallback(async () => {
     try {
@@ -41,27 +47,41 @@ const FullscreenAR = ({ filters, activeFilterId, onSelectFilter, onExit }: Fulls
     }
   }, []);
 
-  // Auto-start on mount
   useEffect(() => {
     startStream();
     return () => stopStream();
   }, [startStream, stopStream]);
 
-  // Get the right renderer for the active filter
   const getActiveRenderer = useCallback((): FilterRenderer | null => {
     if (!activeFilterId) return null;
-
-    // Check built-in registry first
     if (filterRenderers[activeFilterId]) return filterRenderers[activeFilterId];
-
-    // For generated filters, match by prompt
     const filter = filters.find((f) => f.id === activeFilterId);
     if (filter) return getRendererForPrompt(filter.prompt);
-
     return null;
   }, [activeFilterId, filters]);
 
-  // Main render loop
+  const takeSnapshot = useCallback(() => {
+    if (!videoRef.current || !canvasRef.current) return;
+    const v = videoRef.current;
+    const overlay = canvasRef.current;
+    const tmpCanvas = document.createElement("canvas");
+    tmpCanvas.width = v.videoWidth || 1280;
+    tmpCanvas.height = v.videoHeight || 720;
+    const tmpCtx = tmpCanvas.getContext("2d")!;
+    tmpCtx.translate(tmpCanvas.width, 0);
+    tmpCtx.scale(-1, 1);
+    tmpCtx.drawImage(v, 0, 0, tmpCanvas.width, tmpCanvas.height);
+    tmpCtx.setTransform(1, 0, 0, 1, 0, 0);
+    tmpCtx.translate(tmpCanvas.width, 0);
+    tmpCtx.scale(-1, 1);
+    tmpCtx.drawImage(overlay, 0, 0, tmpCanvas.width, tmpCanvas.height);
+    tmpCtx.setTransform(1, 0, 0, 1, 0, 0);
+    const link = document.createElement("a");
+    link.download = `neura-ar-${Date.now()}.png`;
+    link.href = tmpCanvas.toDataURL("image/png");
+    link.click();
+  }, []);
+
   useEffect(() => {
     if (!isStreaming || !canvasRef.current || !videoRef.current) return;
 
@@ -69,11 +89,12 @@ const FullscreenAR = ({ filters, activeFilterId, onSelectFilter, onExit }: Fulls
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const draw = () => {
+    const draw = async () => {
       const vw = videoRef.current!.videoWidth || 1280;
       const vh = videoRef.current!.videoHeight || 720;
       canvas.width = vw;
       canvas.height = vh;
+      setCanvasSize({ w: vw, h: vh });
       ctx.clearRect(0, 0, vw, vh);
 
       tickRef.current++;
@@ -81,59 +102,28 @@ const FullscreenAR = ({ filters, activeFilterId, onSelectFilter, onExit }: Fulls
 
       const renderer = getActiveRenderer();
       if (renderer) {
-        // Simulated face position — center of frame, slightly above middle
-        const face: FaceRect = {
-          cx: vw / 2,
-          cy: vh / 2 - vh * 0.04,
-          faceW: vw * 0.22,
-          faceH: vh * 0.36,
-        };
+        const face = await detectFace();
         renderer(ctx, face, tick, vw, vh);
       }
 
       // HUD corners
       ctx.shadowBlur = 0;
       ctx.shadowColor = "transparent";
-
       const hudAlpha = 0.4;
       ctx.strokeStyle = `hsla(190, 100%, 50%, ${hudAlpha})`;
       ctx.lineWidth = 1;
-
-      // Corner brackets
       const m = 20;
       const s = 40;
-      // TL
-      ctx.beginPath();
-      ctx.moveTo(m, m + s);
-      ctx.lineTo(m, m);
-      ctx.lineTo(m + s, m);
-      ctx.stroke();
-      // TR
-      ctx.beginPath();
-      ctx.moveTo(vw - m - s, m);
-      ctx.lineTo(vw - m, m);
-      ctx.lineTo(vw - m, m + s);
-      ctx.stroke();
-      // BL
-      ctx.beginPath();
-      ctx.moveTo(m, vh - m - s);
-      ctx.lineTo(m, vh - m);
-      ctx.lineTo(m + s, vh - m);
-      ctx.stroke();
-      // BR
-      ctx.beginPath();
-      ctx.moveTo(vw - m - s, vh - m);
-      ctx.lineTo(vw - m, vh - m);
-      ctx.lineTo(vw - m, vh - m - s);
-      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(m, m + s); ctx.lineTo(m, m); ctx.lineTo(m + s, m); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(vw - m - s, m); ctx.lineTo(vw - m, m); ctx.lineTo(vw - m, m + s); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(m, vh - m - s); ctx.lineTo(m, vh - m); ctx.lineTo(m + s, vh - m); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(vw - m - s, vh - m); ctx.lineTo(vw - m, vh - m); ctx.lineTo(vw - m, vh - m - s); ctx.stroke();
 
-      // Top center label
       ctx.font = "12px 'Orbitron', sans-serif";
       ctx.fillStyle = `hsla(190, 100%, 60%, ${hudAlpha + 0.1})`;
       ctx.textAlign = "center";
       ctx.fillText("NEURA AR // LIVE", vw / 2, m + 14);
 
-      // Bottom right telemetry
       ctx.font = "10px 'JetBrains Mono', monospace";
       ctx.textAlign = "right";
       ctx.fillStyle = `hsla(190, 100%, 50%, ${hudAlpha})`;
@@ -142,8 +132,13 @@ const FullscreenAR = ({ filters, activeFilterId, onSelectFilter, onExit }: Fulls
 
       if (renderer) {
         ctx.textAlign = "left";
-        ctx.fillStyle = `hsla(150, 100%, 50%, ${hudAlpha + 0.1})`;
-        ctx.fillText("● FACE LOCKED", m + 5, vh - m - 10);
+        ctx.fillStyle = faceDetected
+          ? `hsla(150, 100%, 50%, ${hudAlpha + 0.1})`
+          : `hsla(40, 100%, 50%, ${hudAlpha + 0.1})`;
+        ctx.fillText(
+          faceDetected ? "● FACE LOCKED" : "○ CENTER MODE",
+          m + 5, vh - m - 10
+        );
       }
 
       animFrameRef.current = requestAnimationFrame(draw);
@@ -151,7 +146,7 @@ const FullscreenAR = ({ filters, activeFilterId, onSelectFilter, onExit }: Fulls
 
     draw();
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, [isStreaming, getActiveRenderer]);
+  }, [isStreaming, getActiveRenderer, detectFace, faceDetected]);
 
   const readyFilters = filters.filter((f) => f.status === "ready");
 
@@ -162,7 +157,6 @@ const FullscreenAR = ({ filters, activeFilterId, onSelectFilter, onExit }: Fulls
       exit={{ opacity: 0 }}
       className="fixed inset-0 z-50 bg-background"
     >
-      {/* Video feed */}
       <video
         ref={videoRef}
         autoPlay
@@ -171,15 +165,11 @@ const FullscreenAR = ({ filters, activeFilterId, onSelectFilter, onExit }: Fulls
         className="absolute inset-0 w-full h-full object-cover"
         style={{ transform: "scaleX(-1)" }}
       />
-
-      {/* AR overlay canvas */}
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full pointer-events-none"
         style={{ transform: "scaleX(-1)" }}
       />
-
-      {/* Subtle scanlines */}
       <div className="absolute inset-0 scanlines pointer-events-none opacity-15" />
 
       {/* Top bar */}
@@ -192,12 +182,21 @@ const FullscreenAR = ({ filters, activeFilterId, onSelectFilter, onExit }: Fulls
         </button>
 
         <div className="flex items-center gap-3">
+          {/* Face tracking indicator */}
+          <div className="flex items-center gap-1.5 glass-panel px-3 py-1.5 rounded">
+            <div className={`w-2 h-2 rounded-full ${faceDetected ? "bg-neon-green animate-pulse-glow" : hasFaceTracking ? "bg-yellow-500" : "bg-muted-foreground"}`} />
+            <span className="text-[10px] font-mono text-foreground">
+              {faceDetected ? "FACE LOCKED" : hasFaceTracking ? "SCANNING" : "CENTER"}
+            </span>
+          </div>
+
           <div className="flex items-center gap-1.5 glass-panel px-3 py-1.5 rounded">
             <div className={`w-2 h-2 rounded-full ${isStreaming ? "bg-neon-green animate-pulse-glow" : "bg-destructive"}`} />
             <span className="text-[10px] font-mono text-foreground">
               {isStreaming ? "LIVE" : "OFFLINE"}
             </span>
           </div>
+
           {activeFilterId && (
             <div className="glass-panel px-3 py-1.5 rounded">
               <span className="text-[10px] font-mono text-neon-cyan">
@@ -207,15 +206,24 @@ const FullscreenAR = ({ filters, activeFilterId, onSelectFilter, onExit }: Fulls
           )}
         </div>
 
-        <button
-          onClick={() => setShowFilters((v) => !v)}
-          className="px-4 py-2 rounded glass-panel font-display text-[10px] tracking-widest text-foreground uppercase hover:bg-primary/10 transition-all border-glow"
-        >
-          {showFilters ? "Hide Filters" : "Filters"}
-        </button>
+        <div className="flex gap-2">
+          {isStreaming && (
+            <button
+              onClick={takeSnapshot}
+              className="px-4 py-2 rounded glass-panel font-display text-[10px] tracking-widest text-neon-green uppercase hover:bg-neon-green/10 transition-all border border-neon-green/30"
+            >
+              📸 Snapshot
+            </button>
+          )}
+          <button
+            onClick={() => setShowFilters((v) => !v)}
+            className="px-4 py-2 rounded glass-panel font-display text-[10px] tracking-widest text-foreground uppercase hover:bg-primary/10 transition-all border-glow"
+          >
+            {showFilters ? "Hide Filters" : "Filters"}
+          </button>
+        </div>
       </div>
 
-      {/* No camera fallback */}
       {!isStreaming && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 z-10">
           <div className="w-20 h-20 rounded-full border-2 border-dashed border-muted-foreground flex items-center justify-center">
@@ -251,7 +259,6 @@ const FullscreenAR = ({ filters, activeFilterId, onSelectFilter, onExit }: Fulls
                   </span>
                 </div>
                 <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-                  {/* None option */}
                   <button
                     onClick={() => onSelectFilter("")}
                     className={`shrink-0 flex flex-col items-center gap-1.5 px-4 py-2.5 rounded-lg transition-all ${
