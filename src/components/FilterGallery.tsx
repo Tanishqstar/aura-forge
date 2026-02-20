@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import { type AIFilterParams } from "@/components/ar/filterRenderers";
 
 export interface Filter {
   id: string;
@@ -8,6 +9,8 @@ export interface Filter {
   anchorType: string;
   animation: string;
   createdAt: string;
+  aiParams?: AIFilterParams;
+  description?: string;
 }
 
 interface FilterGalleryProps {
