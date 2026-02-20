@@ -47,10 +47,19 @@ const FullscreenAR = ({ filters, activeFilterId, onSelectFilter, onExit }: Fulls
     }
   }, []);
 
+  // Clean up on unmount only — stream is started by parent or user gesture
   useEffect(() => {
-    startStream();
     return () => stopStream();
-  }, [startStream, stopStream]);
+  }, [stopStream]);
+
+  // Auto-start only if not already streaming (called after mount via ref)
+  const hasAutoStarted = useRef(false);
+  useEffect(() => {
+    if (!hasAutoStarted.current) {
+      hasAutoStarted.current = true;
+      // Don't auto-start — require user gesture in strict browsers
+    }
+  }, []);
 
   const getActiveRenderer = useCallback((): FilterRenderer | null => {
     if (!activeFilterId) return null;
@@ -231,12 +240,12 @@ const FullscreenAR = ({ filters, activeFilterId, onSelectFilter, onExit }: Fulls
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
           </div>
-          <span className="font-mono text-sm text-muted-foreground">Requesting camera access...</span>
+          <span className="font-mono text-sm text-muted-foreground">Tap to enable camera</span>
           <button
             onClick={startStream}
-            className="px-6 py-2 rounded font-display text-xs tracking-widest text-primary border border-primary/30 hover:bg-primary/10 glow-cyan transition-all"
+            className="px-6 py-2.5 rounded font-display text-xs tracking-widest text-primary border border-primary/30 hover:bg-primary/10 glow-cyan transition-all"
           >
-            Retry
+            ▶ Start Camera
           </button>
         </div>
       )}
